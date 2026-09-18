@@ -1,0 +1,77 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - name: Install test dependencies
+        run: uv sync --locked --all-extras
+      - name: Check release version
+        if: github.ref_type == 'tag'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          assert os.environ["RELEASE_TAG"] == f"v{version}", "Tag must match package version"
+          PY
+      - name: Test and check the notebook
+        run: |
+          uv run --no-sync pytest -q
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff format --check .
+          uv run --no-sync marimo check --strict examples/reviews.py
+      - name: Build distributions
+        run: uv build --no-sources
+      - name: Validate package metadata
+        run: uvx --from twine twine check --strict dist/*
+      - name: Check isolated imports from both distributions
+        run: |
+          uv run --isolated --no-project --with dist/*.whl python -c 'import jevframe'
+          uv run --isolated --no-project --with dist/*.tar.gz python -c 'import jevframe'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/jevframe/
+    permissions:
+      id-token: write
+    steps:
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+      - name: Publish using the GitHub identity
+        run: uv publish --trusted-publishing always
