@@ -1,12 +1,23 @@
-# jevframe
+# jevframe: semantic AI for pandas and Polars
 
-[![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/ktaletsk/jevframe/blob/main/examples/reviews.py)
+[![PyPI version](https://img.shields.io/pypi/v/jevframe.svg)](https://pypi.org/project/jevframe/)
+[![Tests](https://github.com/ktaletsk/jevframe/actions/workflows/ci.yml/badge.svg)](https://github.com/ktaletsk/jevframe/actions/workflows/ci.yml)
+[![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/ktaletsk/jevframe/blob/main/examples/reviews.py/server)
 
-Ask the same semantic questions about every row of a dataframe using
-[TypeSafe Jev](https://docs.typesafe.ai/). Get ordinary pandas or Polars results,
-with bounded async inference and complete probability distributions.
+**jevframe** is a Python library for AI text classification, sentiment analysis,
+and scoring in pandas and Polars DataFrames. Ask natural-language questions about
+each row using [TypeSafe Jev](https://docs.typesafe.ai/) and get structured results
+with complete probability distributions.
 
-## Install
+Label customer reviews, categorize support tickets, flag urgent messages, or grade
+answers against a rubric. Results are ordinary Series and DataFrames, with preserved
+row order and pandas indexes. Evaluate several questions together per row, with
+bounded async concurrency and optional caching.
+
+[Run the interactive marimo demo](https://molab.marimo.io/github/ktaletsk/jevframe/blob/main/examples/reviews.py/server)
+or [browse the notebook source](https://github.com/ktaletsk/jevframe/blob/main/examples/reviews.py).
+
+## Install jevframe
 
 ```sh
 uv add 'jevframe[pandas]==0.1.0'     # in your uv project
@@ -23,7 +34,7 @@ persists it between sessions; `.env` secrets are excluded from forks.
 [Molab's secrets documentation](https://marimo.io/pages/molab/storage#secrets-stay-with-your-notebook).
 Then click **Evaluate reviews** in the demo. You do not need to put the key in a code cell.
 
-## pandas
+## Classify and score pandas DataFrames
 
 These examples use notebook top-level `await`. In a script, put them inside an
 `async def main()` and call `asyncio.run(main())`.
@@ -69,12 +80,12 @@ results = await df.jev.evaluate(
 )
 ```
 
-| Method | Result columns |
-| --- | --- |
-| `noul` | Series named `probability`, the probability of yes |
-| `choice` | `label`, `confidence`, `p__billing`, `p__bug`, … |
-| `score` | `level`, `label`, `score`, `confidence`, `p__0`, `p__1`, … |
-| `evaluate` | Fields prefixed by question name, e.g. `urgent__probability`, `topic__p__billing` |
+| Method | Typical use | Result columns |
+| --- | --- | --- |
+| `noul` | Sentiment analysis or urgency detection | Series named `probability`, the probability of yes |
+| `choice` | Text classification or topic labeling | `label`, `confidence`, `p__billing`, `p__bug`, … |
+| `score` | Answer grading against ordered rubric levels | `level`, `label`, `score`, `confidence`, `p__0`, `p__1`, … |
+| `evaluate` | Dataset labeling with several questions per row | Fields prefixed by question name, e.g. `urgent__probability`, `topic__p__billing` |
 
 `score` is the expected **zero-based** level, not a probability: with five levels it
 ranges from 0 to 4. `level`/`label` identify the highest-probability level, with ties
@@ -150,7 +161,7 @@ Dates/times become ISO text. Unsupported objects and infinities raise a row-awar
 context error. Supply a callable to convert custom values. Context errors always
 raise, even under `errors="coerce"`.
 
-## Eager Polars
+## Classify eager Polars DataFrames
 
 ```python
 import polars as pl
@@ -225,7 +236,10 @@ context to TypeSafe. Late context errors can occur after other rows have complet
 completed requests cannot be undone. Credentials are read from the environment or
 the SDK client; the library does not discover or load dotenv files.
 
-## marimo example and development
+## Interactive marimo notebook
+
+[Open the demo on a molab server](https://molab.marimo.io/github/ktaletsk/jevframe/blob/main/examples/reviews.py/server)
+to edit questions, evaluate synthetic reviews, and explore probability histograms.
 
 From a checkout:
 
@@ -240,10 +254,15 @@ to see the results and probability histograms. The eight synthetic reviews need 
 requests, each containing all three questions; repeated evaluations reuse the cache.
 The example makes no requests until the button is clicked and a key is configured.
 
-The badge opens the GitHub notebook preview. Fork it into your molab workspace to
-add your own secret and run it on a server. The notebook includes inline dependency
-metadata that installs `jevframe[pandas]==0.1.0` from PyPI. The badge requires the
-notebook to be available on this repository's `main` branch.
+The badge opens the notebook's molab server view. Fork it into your workspace to
+add your own `TYPESAFE_API_KEY` secret. The notebook includes PEP 723 inline
+dependency metadata that installs `jevframe[pandas]==0.1.0` from PyPI.
+
+## Development and support
+
+Report bugs or request features in [GitHub Issues](https://github.com/ktaletsk/jevframe/issues).
+jevframe is maintained by Konstantin Taletskiy and distributed under the
+[MIT license](https://github.com/ktaletsk/jevframe/blob/main/LICENSE).
 
 For development checks, install all extras:
 
