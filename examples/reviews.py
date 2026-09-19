@@ -196,14 +196,16 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _():
+def api_key_notice():
+    mo.stop(bool(os.environ.get("TYPESAFE_API_KEY", "").strip()))
+
     mo.md(r"""
     ## Typesafe AI key
 
     - **Locally**: `export TYPESAFE_API_KEY='your-key'` before starting marimo
     - **On molab:** open Development Panel in the bottom left corner, click
       the **Secrets** tab and add `TYPESAFE_API_KEY`.
-    """)
+    """).callout(kind="warn", title="Warning")
     return
 
 
