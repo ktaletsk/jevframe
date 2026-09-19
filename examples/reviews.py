@@ -41,13 +41,13 @@ def brand_banner():
         padding:9px 18px; border-bottom:1px solid #202020; background:#f4f4f0;
         font:11px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace; letter-spacing:.07em; }
     .jevframe-brand .body { padding:24px 26px 26px; }
-    .jevframe-brand .brands { display:flex; align-items:center; gap:20px; flex-wrap:wrap; }
+    .jevframe-brand .brands { display:flex; flex-direction:column;
+        align-items:flex-start; gap:4px; }
     .jevframe-brand .logo { display:block; width:340px; max-width:100%; }
     .jevframe-brand .logo svg { display:block; width:100%; height:auto; }
-    .jevframe-brand .partner { display:flex; align-items:center; gap:20px; }
-    .jevframe-brand .times { font-size:25px; font-weight:400; }
+    .jevframe-brand .partner { padding-left:12px; }
     .jevframe-brand .name { color:#181818; text-decoration:none;
-        font-size:30px; font-weight:800; line-height:1.1; letter-spacing:-.045em; }
+        font-size:20px; font-weight:600; line-height:1.3; letter-spacing:-.015em; }
     .jevframe-brand .tagline { margin:16px 0 22px; max-width:38em;
         font-size:17px; line-height:1.5; color:#181818; }
     .jevframe-brand .links { display:flex; gap:24px; flex-wrap:wrap;
@@ -137,9 +137,8 @@ def brand_banner():
     </svg>
                 </a>
                 <div class="partner">
-                    <span class="times" aria-hidden="true">×</span>
                     <a class="name" href="https://typesafe.ai/"
-                       target="_blank" rel="noopener noreferrer">TypeSafe AI</a>
+                       target="_blank" rel="noopener noreferrer">Powered by Typesafe AI</a>
                 </div>
             </div>
             <p class="tagline"><strong>jevframe</strong> brings TypeSafe AI’s
