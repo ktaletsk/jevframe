@@ -4,9 +4,12 @@ from pathlib import Path
 
 
 def test_marimo_example_loads_and_evaluates_with_mocked_inference():
-    code = """
+    code = r"""
+import io
 import json
 import os
+import urllib.request
+import zipfile
 from types import SimpleNamespace
 
 import httpx2
@@ -14,6 +17,19 @@ from typesafe_sdk import AsyncTypeSafeClient
 
 from examples.reviews import app
 from jevframe import _engine
+
+# Keep both the public dataset download and inference offline in this test.
+archive_bytes = io.BytesIO()
+with zipfile.ZipFile(archive_bytes, 'w') as archive:
+    archive.writestr(
+        'sentiment labelled sentences/amazon_cells_labelled.txt',
+        ''.join(f'Customer review {i}\t{i % 2}\n' for i in range(1000)),
+    )
+def download(url, *, timeout):
+    assert url.startswith('https://archive.ics.uci.edu/static/public/331/')
+    assert timeout == 30
+    return io.BytesIO(archive_bytes.getvalue())
+urllib.request.urlopen = download
 
 calls = []
 def handler(request):
@@ -23,10 +39,13 @@ def handler(request):
         'model': 'test', 'usage': {},
         'answers': {
             'dissatisfied': {'type': 'noul', 'noul': 0.4},
-            'urgent': {'type': 'noul', 'noul': 0.7},
+            'defect': {'type': 'noul', 'noul': 0.7},
             'topic': {
-                'type': 'choice', 'choice': 'billing', 'confidence': 0.8,
-                'probabilities': {'billing': 0.8, 'bug': 0.1, 'other': 0.1},
+                'type': 'choice', 'choice': 'functionality', 'confidence': 0.8,
+                'probabilities': {
+                    'functionality': 0.8, 'usability': 0.05, 'value': 0.05,
+                    'service': 0.05, 'other': 0.05,
+                },
             },
         },
     })
@@ -36,13 +55,16 @@ _engine._create_client = lambda **kwargs: AsyncTypeSafeClient(
 )
 os.environ.pop('TYPESAFE_API_KEY', None)
 _, initial = app.run()
-assert len(initial['reviews']) == 8
+assert len(initial['all_reviews']) == 1000
+assert len(initial['reviews']) == 50
+assert initial['reviews'].index.name == 'review_id'
+assert set(initial['all_reviews']['reference_sentiment']) == {'positive', 'negative'}
 assert 'results' not in initial
 assert calls == []
 controls = {
     'evaluate': SimpleNamespace(value=True),
     'question': SimpleNamespace(value='Is this customer dissatisfied?'),
-    'urgency_question': SimpleNamespace(value='Does this customer need urgent help?'),
+    'defect_question': SimpleNamespace(value='Does this review report a product defect?'),
     'topic_question': SimpleNamespace(value='What is the main issue?'),
     'output_layout': SimpleNamespace(value='columns'),
 }
@@ -53,34 +75,38 @@ assert calls == []
 # Secrets added after opening the notebook work on the next click.
 os.environ['TYPESAFE_API_KEY'] = 'test-key'
 outputs, definitions = app.run(defs=controls)
-assert len(calls) == 8
-assert all(set(call['questions']) == {'dissatisfied', 'urgent', 'topic'} for call in calls)
-assert definitions['results'].shape == (8, 9)
-assert definitions['results']['dissatisfied__probability'].tolist() == [0.4] * 8
-assert definitions['results']['urgent__probability'].tolist() == [0.7] * 8
-assert definitions['results']['topic__label'].tolist() == ['billing'] * 8
-assert definitions['results']['topic__p__bug'].tolist() == [0.1] * 8
-assert definitions['decisions'].shape == (8, 7)
+assert len(calls) == 50
+assert all(set(call['questions']) == {'dissatisfied', 'defect', 'topic'} for call in calls)
+assert all(set(call['state']) == {'review'} for call in calls)
+assert definitions['results'].shape == (50, 12)
+assert definitions['results']['evaluation_status'].tolist() == ['ok'] * 50
+assert definitions['results']['dissatisfied__probability'].tolist() == [0.4] * 50
+assert definitions['results']['defect__probability'].tolist() == [0.7] * 50
+assert definitions['results']['topic__label'].tolist() == ['functionality'] * 50
+assert definitions['results']['topic__p__usability'].tolist() == [0.05] * 50
+assert definitions['decisions'].shape == (50, 9)
 assert any(output is not None for output in outputs)
 # Repeat using the same data/cache, then edit one question: only the latter needs inference.
-controls.update(cache=definitions['cache'], reviews=definitions['reviews'])
+controls.update({name: definitions[name] for name in (
+    'cache', 'reviews', 'all_reviews', 'csv', 'io', 'load_public_reviews', 'urlopen', 'zipfile',
+)})
 app.run(defs=controls)
-assert len(calls) == 8
+assert len(calls) == 50
 controls['output_layout'] = SimpleNamespace(value='struct')
 _, packed = app.run(defs=controls)
-assert len(calls) == 8
-assert packed['results'].shape == (8, 3)
+assert len(calls) == 50
+assert packed['results'].shape == (50, 4)
 assert packed['decisions'].columns.tolist() == ['result']
 assert packed['decisions']['result'].tolist() == definitions['decisions'].to_dict('records')
-controls['urgency_question'] = SimpleNamespace(value='Does this require a response today?')
+controls['defect_question'] = SimpleNamespace(value='Is the product broken?')
 app.run(defs=controls)
-assert len(calls) == 16
-assert calls[-1]['questions']['urgent']['instructions'] == 'Does this require a response today?'
+assert len(calls) == 100
+assert calls[-1]['questions']['defect']['instructions'] == 'Is the product broken?'
 # Empty questions are rejected before spending requests.
 controls['question'] = SimpleNamespace(value='  ')
 _, empty_question = app.run(defs=controls)
 assert 'results' not in empty_question
-assert len(calls) == 16
+assert len(calls) == 100
 """
     result = subprocess.run(
         [sys.executable, "-c", code],

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/jevframe/preview.png" alt="jevframe — df.jev()" width="693">
+</p>
+
 # jevframe: semantic AI for pandas and Polars
 
 [![PyPI version](https://img.shields.io/pypi/v/jevframe.svg)](https://pypi.org/project/jevframe/)
@@ -133,7 +137,7 @@ shares the same context and request. Different rows are evaluated independently.
 For example, 100 rows with three questions produce 100 initial requests and 100
 result rows, with answers in separate columns or one structured column. Retries can add
 requests; skipped or cached rows need none. This does not expand one input row
-into multiple generated records. The demo evaluates dissatisfaction, urgency,
+into multiple generated records. The demo evaluates dissatisfaction, product defects,
 and topic together for each review.
 
 ## Row selection and context
@@ -239,19 +243,23 @@ the SDK client; the library does not discover or load dotenv files.
 ## Interactive marimo notebook
 
 [Open the demo on a molab server](https://molab.marimo.io/github/ktaletsk/jevframe/blob/main/examples/reviews.py/server)
-to edit questions, evaluate synthetic reviews, and explore probability histograms.
+to edit questions, evaluate real Amazon review excerpts from
+[UCI's Sentiment Labelled Sentences](https://doi.org/10.24432/C57604), and explore
+probability histograms.
 
 From a checkout:
 
 ```sh
 # For library development only: uv sync --extra pandas (or --extra polars)
 uv sync --extra examples
-uv run marimo edit examples/reviews.py
+uv run marimo edit --sandbox examples/reviews.py
 ```
 
 Edit the three questions, choose an output layout, and click **Evaluate reviews**
-to see the results and probability histograms. The eight synthetic reviews need eight initial
-requests, each containing all three questions; repeated evaluations reuse the cache.
+to see the results and probability histograms. Start with 50 reviews or select up to
+1,000. Each uncached review uses one initial request containing all three questions;
+repeated evaluations reuse the cache. Only review text is sent to Jev; the dataset's
+reference sentiment labels remain available for comparison.
 The example makes no requests until the button is clicked and a key is configured.
 
 The badge opens the notebook's molab server view. Fork it into your workspace to
