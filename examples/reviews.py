@@ -172,6 +172,25 @@ def _():
     Edit the questions, then click **Evaluate reviews** to see the answers and
     their full probability distributions. Choose separate columns or one
     structured column containing the same answers.
+
+    ### Start with one question
+
+    Import the pandas integration to register `.jev`, then await a result:
+
+    ```python
+    import jevframe.pandas
+
+    probabilities = await reviews.jev.noul(
+        "Is this customer dissatisfied?",
+        state="review",
+    )
+    ```
+
+    `probabilities` is an ordinary pandas Series of yes probabilities, with the
+    same index as `reviews`. `state` selects the context columns; for multiple
+    columns, use `state=["title", "review"]`. Filter rows with pandas first,
+    for example `await reviews.head(10).jev.noul("Is this negative?", state="review")`.
+    These examples use notebook top-level `await`.
     """)
     return
 
@@ -202,7 +221,6 @@ def review_storage():
         ),
         target_options={"https": {"timeout": 30}},
     )
-
     return (review_files,)
 
 
@@ -286,6 +304,87 @@ def sample_reviews(all_reviews, sample_size):
     return (reviews,)
 
 
+@app.cell(hide_code=True)
+def api_batch_example():
+    mo.md("""
+    ## Several questions, one call
+
+    Use named questions from the official TypeSafe SDK to add several result
+    columns at once. This example asks about dissatisfaction and topic; the
+    interactive demo below adds a third question about product defects.
+
+    ```python
+    from typesafe_sdk import Choice, Noul
+    from jevframe import MemoryCache
+
+    cache = MemoryCache()  # Create once; reuse across evaluations.
+    questions = {
+        "dissatisfied": Noul(instructions="Is this customer dissatisfied?"),
+        "topic": Choice(
+            instructions="What is the main topic of this review?",
+            criteria={"functionality": None, "value": None, "other": None},
+        ),
+    }
+
+    answers = await reviews.jev.evaluate(
+        state="review",
+        questions=questions,
+        max_concurrency=4,
+        cache=cache,
+        output="columns",  # Use "struct" to pack fields into one result column.
+    )
+    ```
+
+    `answers` is a pandas DataFrame with fields such as
+    `dissatisfied__probability`, `topic__label`, and `topic__p__value`.
+    Each row's questions share **one request**, with up to four row requests
+    running concurrently here. The input stays unchanged.
+
+    Both output layouts preserve one result row per review and include the full
+    probability distribution. Reusing `cache` avoids repeating successful requests
+    with the same context and questions. Requests that fail raise an error by
+    default; this demo uses `errors="coerce"` to show missing answers with a warning.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def api_shortcuts():
+    mo.accordion(
+        {
+            "More API shortcuts: choice and score": mo.md("""
+            **Choose a label** and get a native DataFrame with `label`, `confidence`,
+            and one `p__<label>` column for every choice:
+
+            ```python
+            topics = await reviews.jev.choice(
+                "What is the main topic of this review?",
+                choices=["functionality", "value", "other"],
+                state="review",
+            )
+            ```
+
+            **Score on an ordered scale** and get `level`, `label`, `score`,
+            `confidence`, and `p__0` through `p__2`:
+
+            ```python
+            sentiment = await reviews.jev.score(
+                "How positive is this review?",
+                levels=["Negative", "Neutral", "Positive"],
+                state="review",
+            )
+            ```
+
+            `score` is the probability-weighted, zero-based expected score
+            (0 to 2 here). `level` and `label` identify the most likely level.
+            For eager Polars DataFrames, `import jevframe.polars` registers the same
+            async `.jev` methods and returns native Polars results.
+            """)
+        }
+    )
+    return
+
+
 @app.cell
 def _():
     question = mo.ui.text_area(
@@ -341,7 +440,7 @@ def review_questions(defect_question, question, topic_question):
     return questions, request_model
 
 
-@app.cell(hide_code=True)
+@app.cell
 def request_helpers():
     def make_request_body(row, question_objects, model):
         # Match the official SDK's JSON serialization; never include credentials or labels.
