@@ -161,36 +161,172 @@ def brand_banner():
 
 
 @app.cell(hide_code=True)
-def _():
+def library_intro():
     mo.md("""
-    # Semantic questions over real customer reviews
+    # Classify data semantically
 
-    Turn customer feedback into columns you can filter, sort, and plot with
-    `jevframe`. Ask whether a customer is **dissatisfied**, whether they report a
-    **product defect**, and **what the review is about**.
+    Some columns require a judgment about meaning: whether a message needs action,
+    which topic a document covers, or how well an answer meets a rubric.
+    **jevframe lets you write that question once and evaluate it across the rows
+    of a DataFrame.**
 
-    Edit the questions, then click **Evaluate reviews** to see the answers and
-    their full probability distributions. Choose separate columns or one
-    structured column containing the same answers.
+    You choose the row context and the questions. TypeSafe AI's Jev evaluates them,
+    and jevframe returns ordinary pandas or eager Polars results with probabilities.
+    Use those results in your existing filtering, sorting, grouping, and plotting code.
 
-    ### Start with one question
+    This notebook teaches the workflow: **select context → define questions →
+    evaluate rows → work with the results**. We'll first explore the API, then use
+    public customer reviews as a worked example.
 
-    Import the pandas integration to register `.jev`, then await a result:
+    ## 1. Choose the context and ask a question
+
+    For a pandas DataFrame `df` with a `text` column:
 
     ```python
-    import jevframe.pandas
+    import jevframe.pandas  # Registers df.jev.
 
-    probabilities = await reviews.jev.noul(
-        "Is this customer dissatisfied?",
-        state="review",
+    probabilities = await df.jev.noul(
+        "Does this text ask someone to take action?",
+        state="text",
     )
     ```
 
-    `probabilities` is an ordinary pandas Series of yes probabilities, with the
-    same index as `reviews`. `state` selects the context columns; for multiple
-    columns, use `state=["title", "review"]`. Filter rows with pandas first,
-    for example `await reviews.head(10).jev.noul("Is this negative?", state="review")`.
-    These examples use notebook top-level `await`.
+    `probabilities` is a pandas Series containing the probability of yes for each
+    row, with the original index. The input DataFrame stays unchanged.
+
+    `state` selects what the model sees. Use one column, several columns such as
+    `state=["title", "text"]`, or a callable that builds context from a row.
+    Select rows with your usual dataframe operations before evaluating them, for
+    example `df.head(10).jev.noul(...)`.
+
+    These examples use notebook top-level `await`. For an eager Polars DataFrame,
+    `import jevframe.polars` registers the same async methods and returns native
+    Polars objects.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def api_shortcuts():
+    mo.vstack(
+        [
+            mo.md("""
+            ## 2. Choose the answer shape
+
+            Match the method to the decision you need. Each method applies your
+            questions row by row.
+
+            | Method | Use it to | Result |
+            | --- | --- | --- |
+            | `noul` | Flag relevance, urgency, or another condition | Series of yes probabilities |
+            | `choice` | Classify into labels you define | Label and full distribution |
+            | `score` | Grade against an ordered rubric | Expected score and full distribution |
+            | `evaluate` | Ask several named questions together | Fields for every question |
+            """),
+            mo.accordion(
+                {
+                    "Examples: classify text and grade an answer": mo.md("""
+                    Route text to one of your labels:
+
+                    ```python
+                    teams = await df.jev.choice(
+                        "Which team should handle this request?",
+                        choices=["engineering", "finance", "support"],
+                        state="text",
+                    )
+                    ```
+
+                    The result contains `label`, `confidence`, and a `p__<label>`
+                    column for every choice.
+
+                    For a DataFrame with `question` and `answer` columns, apply a rubric:
+
+                    ```python
+                    grades = await df.jev.score(
+                        "How completely does the answer address the question?",
+                        levels=["Incomplete", "Partial", "Complete"],
+                        state=["question", "answer"],
+                    )
+                    ```
+
+                    The result contains `level`, `label`, `score`, `confidence`, and
+                    `p__0` through `p__2`. `score` is the probability-weighted,
+                    zero-based expected score (0 to 2 here); `level` and `label`
+                    identify the most likely level.
+                    """)
+                }
+            ),
+        ]
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def api_batch_example():
+    mo.md("""
+    ## 3. Ask several questions together
+
+    When you need several judgments about the same row, pass named question
+    objects from the official TypeSafe SDK to `evaluate`. You can combine
+    `Noul`, `Choice`, and `Score` questions in one call.
+
+    ```python
+    from typesafe_sdk import Choice, Noul
+    from jevframe import MemoryCache
+
+    cache = MemoryCache()  # Create once; reuse across evaluations.
+    questions = {
+        "action_needed": Noul(instructions="Does this text ask someone to take action?"),
+        "team": Choice(
+            instructions="Which team should handle this request?",
+            criteria={"engineering": None, "finance": None, "support": None},
+        ),
+    }
+
+    answers = await df.jev.evaluate(
+        state="text",
+        questions=questions,
+        max_concurrency=4,
+        cache=cache,
+        output="columns",  # Use "struct" to pack fields into one result column.
+    )
+    ```
+
+    `answers` contains fields such as `action_needed__probability`, `team__label`,
+    and `team__p__engineering`. Question names become column prefixes, so you can
+    trace each result back to the question that produced it.
+
+    All questions for one row share **one request**. `max_concurrency` bounds the
+    number of row requests running at once. The library preserves row order and
+    pandas indexes, including duplicate labels.
+
+    Both output layouts keep **one output row per input row** and retain the full
+    probability distributions. Reusing `cache` avoids repeating successful requests
+    with the same context, questions, and model configuration. Failed requests
+    raise an error by default; `errors="coerce"` keeps missing answers and emits
+    a warning.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def worked_example_intro():
+    mo.md("""
+    ---
+
+    **Now apply the workflow to a real problem.** Imagine a table of customer
+    reviews: the text is readable, but you want columns that capture dissatisfaction,
+    reported defects, and the main topic. These are three semantic questions about
+    the same row, so they fit a single `evaluate` call.
+
+    In this worked example, `reviews` is the DataFrame and `state="review"` selects
+    its text column. Two `Noul` questions flag dissatisfaction and defects; a
+    `Choice` question classifies the topic. The original sentiment label is kept
+    for comparison and is not part of the model's context.
+
+    Choose a sample, edit the questions, then click **Evaluate reviews**. Inspect
+    the result table and probability distributions, and use **Anatomy of a Jev
+    request** to see how the dataframe call becomes a request for one row.
     """)
     return
 
@@ -304,87 +440,6 @@ def sample_reviews(all_reviews, sample_size):
         ]
     )
     return (reviews,)
-
-
-@app.cell(hide_code=True)
-def api_batch_example():
-    mo.md("""
-    ## Several questions, one call
-
-    Use named questions from the official TypeSafe SDK to add several result
-    columns at once. This example asks about dissatisfaction and topic; the
-    interactive demo below adds a third question about product defects.
-
-    ```python
-    from typesafe_sdk import Choice, Noul
-    from jevframe import MemoryCache
-
-    cache = MemoryCache()  # Create once; reuse across evaluations.
-    questions = {
-        "dissatisfied": Noul(instructions="Is this customer dissatisfied?"),
-        "topic": Choice(
-            instructions="What is the main topic of this review?",
-            criteria={"functionality": None, "value": None, "other": None},
-        ),
-    }
-
-    answers = await reviews.jev.evaluate(
-        state="review",
-        questions=questions,
-        max_concurrency=4,
-        cache=cache,
-        output="columns",  # Use "struct" to pack fields into one result column.
-    )
-    ```
-
-    `answers` is a pandas DataFrame with fields such as
-    `dissatisfied__probability`, `topic__label`, and `topic__p__value`.
-    Each row's questions share **one request**, with up to four row requests
-    running concurrently here. The input stays unchanged.
-
-    Both output layouts preserve one result row per review and include the full
-    probability distribution. Reusing `cache` avoids repeating successful requests
-    with the same context and questions. Requests that fail raise an error by
-    default; this demo uses `errors="coerce"` to show missing answers with a warning.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def api_shortcuts():
-    mo.accordion(
-        {
-            "More API shortcuts: choice and score": mo.md("""
-            **Choose a label** and get a native DataFrame with `label`, `confidence`,
-            and one `p__<label>` column for every choice:
-
-            ```python
-            topics = await reviews.jev.choice(
-                "What is the main topic of this review?",
-                choices=["functionality", "value", "other"],
-                state="review",
-            )
-            ```
-
-            **Score on an ordered scale** and get `level`, `label`, `score`,
-            `confidence`, and `p__0` through `p__2`:
-
-            ```python
-            sentiment = await reviews.jev.score(
-                "How positive is this review?",
-                levels=["Negative", "Neutral", "Positive"],
-                state="review",
-            )
-            ```
-
-            `score` is the probability-weighted, zero-based expected score
-            (0 to 2 here). `level` and `label` identify the most likely level.
-            For eager Polars DataFrames, `import jevframe.polars` registers the same
-            async `.jev` methods and returns native Polars results.
-            """)
-        }
-    )
-    return
 
 
 @app.cell
@@ -527,6 +582,28 @@ async def evaluate_reviews(
         )
     mo.md(_message).callout(kind="warn" if _failed.any() else "success")
     return decisions, evaluation_progress, evaluation_requests, results
+
+
+@app.cell(hide_code=True)
+def native_results_intro():
+    mo.md("""
+    ## 4. Work with ordinary dataframe results
+
+    After evaluation, use the returned values with your usual dataframe tools.
+    In this example, we combine the input columns and decisions by their preserved
+    index. With `output="columns"`, filtering by a probability is ordinary pandas:
+
+    ```python
+    results = pd.concat([reviews, decisions], axis=1)
+    needs_review = results.loc[results["dissatisfied__probability"] >= 0.8]
+    ```
+
+    The table below contains the results in your chosen layout. The histogram
+    shows how the yes probabilities vary across rows; the request inspector lets
+    you examine one row's full distribution. The same pattern works for whichever
+    labels, conditions, or rubric you apply to your own data.
+    """)
+    return
 
 
 @app.cell
@@ -761,6 +838,29 @@ def request_answers(
             ),
         ]
     )
+    return
+
+
+@app.cell(hide_code=True)
+def use_your_own_data():
+    mo.md("""
+    ## Use the same workflow on your data
+
+    Replace `reviews` with your DataFrame and choose the columns that provide the
+    context for your decision. The library works with text, structured values, or
+    context assembled by a synchronous row callable.
+
+    - **Document labeling:** select a title and abstract, then use `choice` for your topics.
+    - **Message triage:** use `noul` to flag messages needing attention and `choice` to route them.
+    - **Answer evaluation:** select a question and answer, then use `score` with your rubric.
+
+    Start with a small sample and inspect the probabilities before evaluating more
+    rows. When you need several judgments, combine them with `evaluate` so they
+    share each row's context. The outputs remain ordinary dataframe values that
+    you can join, filter, aggregate, or plot.
+
+    [API and installation guide](https://github.com/ktaletsk/jevframe#readme)
+    """)
     return
 
 
