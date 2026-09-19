@@ -8,6 +8,7 @@ def test_marimo_example_loads_and_evaluates_with_mocked_inference():
 import io
 import json
 import os
+import warnings
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,7 +18,7 @@ from fsspec.implementations.http import HTTPFileSystem
 from typesafe_sdk import AsyncTypeSafeClient
 
 from examples.reviews import app
-from jevframe import _engine
+from jevframe import EvaluationWarning, MemoryCache, _engine
 
 # Keep both the public dataset download and inference offline in this test.
 archive_bytes = io.BytesIO()
@@ -37,9 +38,14 @@ async def exists(self, url, **kwargs):
 HTTPFileSystem._exists = exists
 
 calls = []
+fail_reviews = set()
 def handler(request):
+    assert request.method == 'POST'
+    assert request.url.path == '/v1/systemone'
     payload = json.loads(request.content)
     calls.append(payload)
+    if payload['state']['review'] in fail_reviews:
+        return httpx2.Response(400, json={'message': 'Test failure'})
     return httpx2.Response(200, json={
         'model': 'test', 'usage': {},
         'answers': {
@@ -59,6 +65,7 @@ _engine._create_client = lambda **kwargs: AsyncTypeSafeClient(
     api_key='test-key', transport=httpx2.MockTransport(handler),
 )
 os.environ.pop('TYPESAFE_API_KEY', None)
+os.environ['TYPESAFE_DEFAULT_MODEL'] = 'test-model'
 _, initial = app.run()
 assert len(initial['all_reviews']) == 1000
 assert len(initial['reviews']) == 50
@@ -70,6 +77,11 @@ assert initial['review_files'].ls('sentiment labelled sentences', detail=False) 
 ]
 assert 'results' not in initial
 assert calls == []
+assert initial['request_preview']['model'] == 'test-model'
+assert initial['request_preview']['state'] == {
+    'review': initial['reviews'].iloc[0]['review'],
+}
+assert list(initial['request_preview']['questions']) == ['dissatisfied', 'defect', 'topic']
 controls = {
     'evaluate': SimpleNamespace(value=True),
     'question': SimpleNamespace(value='Is this customer dissatisfied?'),
@@ -95,27 +107,64 @@ assert definitions['results']['topic__label'].tolist() == ['functionality'] * 50
 assert definitions['results']['topic__p__usability'].tolist() == [0.05] * 50
 assert definitions['decisions'].shape == (50, 9)
 assert any(output is not None for output in outputs)
+# Every displayed body equals the corresponding real SDK HTTP body, including
+# the environment-selected model and official question serialization.
+assert definitions['evaluation_requests'] == calls
+assert definitions['request_preview'] == calls[0]
+assert definitions['inspected_request'] == calls[0]
+assert definitions['inspected_fields'] == definitions['decisions'].iloc[0].to_dict()
+assert definitions['evaluation_progress'].completed == 50
+assert definitions['evaluation_progress'].cache_hits == 0
+assert definitions['evaluation_progress'].failed == 0
 # Repeat using the same data/cache, then edit one question: only the latter needs inference.
 controls.update({name: definitions[name] for name in (
     'cache', 'reviews', 'all_reviews', 'csv', 'load_public_reviews',
 )})
-app.run(defs=controls)
+_, repeated = app.run(defs=controls)
 assert len(calls) == 50
+assert repeated['evaluation_progress'].cache_hits == 50
+# Select by position, preserving the original shuffled dataframe index.
+controls['request_row'] = SimpleNamespace(value=7)
+_, selected = app.run(defs=controls)
+assert len(calls) == 50
+assert selected['request_preview'] == calls[7]
+assert selected['inspected_request'] == calls[7]
+assert selected['inspected_fields'] == definitions['decisions'].iloc[7].to_dict()
 controls['output_layout'] = SimpleNamespace(value='struct')
 _, packed = app.run(defs=controls)
 assert len(calls) == 50
 assert packed['results'].shape == (50, 4)
 assert packed['decisions'].columns.tolist() == ['result']
 assert packed['decisions']['result'].tolist() == definitions['decisions'].to_dict('records')
+assert packed['inspected_fields'] == selected['inspected_fields']
+assert packed['evaluation_progress'].cache_hits == 50
 controls['defect_question'] = SimpleNamespace(value='Is the product broken?')
-app.run(defs=controls)
+_, changed = app.run(defs=controls)
 assert len(calls) == 100
 assert calls[-1]['questions']['defect']['instructions'] == 'Is the product broken?'
+assert changed['evaluation_requests'] == calls[50:]
+assert changed['inspected_request'] == calls[57]
+assert definitions['evaluation_requests'][7]['questions']['defect']['instructions'] == (
+    'Does this review report a product defect?'
+)
 # Empty questions are rejected before spending requests.
 controls['question'] = SimpleNamespace(value='  ')
 _, empty_question = app.run(defs=controls)
 assert 'results' not in empty_question
 assert len(calls) == 100
+# Inspecting a failed row must not render invented probabilities in either layout.
+controls['question'] = SimpleNamespace(value='Is this customer dissatisfied?')
+fail_reviews.add(definitions['reviews'].iloc[7]['review'])
+for layout in ('columns', 'struct'):
+    controls['cache'] = MemoryCache()
+    controls['output_layout'] = SimpleNamespace(value=layout)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always', EvaluationWarning)
+        _, failed = app.run(defs=controls)
+    assert any(isinstance(warning.message, EvaluationWarning) for warning in caught)
+    assert failed['inspected_fields'] is None
+    assert failed['results'].iloc[7]['evaluation_status'] == 'failed'
+    assert failed['evaluation_progress'].failed == 1
 """
     result = subprocess.run(
         [sys.executable, "-c", code],

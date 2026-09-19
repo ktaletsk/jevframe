@@ -20,6 +20,10 @@ bounded async concurrency and optional caching.
 
 [Run the interactive marimo demo](https://molab.marimo.io/github/ktaletsk/jevframe/blob/main/examples/reviews.py/server)
 or [browse the notebook source](https://github.com/ktaletsk/jevframe/blob/main/examples/reviews.py).
+Its **Anatomy of a Jev request** section lets you select a real review, inspect
+the state and typed questions in its JSON payload, and explore the evaluated
+probabilities and dataframe fields. Request previews work without an API key;
+only **Evaluate reviews** triggers inference.
 
 ## Install jevframe
 

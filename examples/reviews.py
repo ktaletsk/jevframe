@@ -11,8 +11,8 @@
 
 import marimo
 
-__generated_with = "0.24.2"
-app = marimo.App(width="medium")
+__generated_with = "0.24.0"
+app = marimo.App(width="medium", auto_download=["html"])
 
 with app.setup:
     import os
@@ -160,7 +160,7 @@ def brand_banner():
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     mo.md("""
     # Semantic questions over real customer reviews
@@ -202,6 +202,7 @@ def review_storage():
         ),
         target_options={"https": {"timeout": 30}},
     )
+
     return (review_files,)
 
 
@@ -316,12 +317,62 @@ def _():
 
 
 @app.cell
-async def _(
+def review_questions(defect_question, question, topic_question):
+    from typesafe_sdk import constants as _sdk_defaults
+
+    # The inspector and inference share these exact SDK question objects.
+    request_model = (
+        os.environ.get("TYPESAFE_DEFAULT_MODEL", "").strip() or _sdk_defaults.DEFAULT_MODEL
+    )
+    questions = {
+        "dissatisfied": Noul(instructions=question.value),
+        "defect": Noul(instructions=defect_question.value),
+        "topic": Choice(
+            instructions=topic_question.value,
+            criteria={
+                "functionality": "Performance, reliability, defects, or whether the product works",
+                "usability": "Ease of use, setup, comfort, fit, or design",
+                "value": "Price, affordability, or value for money",
+                "service": "Customer support, delivery, seller service, or returns",
+                "other": "General praise, recommendations, or another topic",
+            },
+        ),
+    }
+    return questions, request_model
+
+
+@app.cell(hide_code=True)
+def request_helpers():
+    def make_request_body(row, question_objects, model):
+        # Match the official SDK's JSON serialization; never include credentials or labels.
+        return {
+            "state": {"review": row["review"]},
+            "model": model,
+            "questions": {
+                name: item.model_dump(mode="json") for name, item in question_objects.items()
+            },
+        }
+
+    def unpack_decision(row):
+        # Both output layouts hold the same fields. A failed row stays missing.
+        fields = row["result"] if "result" in row.index else row.to_dict()
+        if not isinstance(fields, dict) or all(pd.isna(value) for value in fields.values()):
+            return None
+        return fields
+
+    return make_request_body, unpack_decision
+
+
+@app.cell
+async def evaluate_reviews(
     cache,
     defect_question,
     evaluate,
+    make_request_body,
     output_layout,
     question,
+    questions,
+    request_model,
     reviews,
     topic_question,
 ):
@@ -337,32 +388,29 @@ async def _(
         not all(_input.value.strip() for _input in [question, defect_question, topic_question]),
         mo.md("Enter all three questions first."),
     )
+    # Snapshot the payloads used by this evaluation, before the first await.
+    evaluation_requests = [
+        make_request_body(row, questions, request_model) for row in reviews.to_dict("records")
+    ]
+    _progress_updates = []
     with mo.status.progress_bar(total=len(reviews), title="Evaluating reviews") as _bar:
+
+        def _on_progress(update):
+            _progress_updates[:] = [update]
+            _bar.update()
+
         decisions = await reviews.jev.evaluate(
             # Keep the reference labels out of the model's context.
             state="review",
-            questions={
-                "dissatisfied": Noul(instructions=question.value),
-                "defect": Noul(instructions=defect_question.value),
-                "topic": Choice(
-                    instructions=topic_question.value,
-                    criteria={
-                        "functionality": (
-                            "Performance, reliability, defects, or whether the product works"
-                        ),
-                        "usability": "Ease of use, setup, comfort, fit, or design",
-                        "value": "Price, affordability, or value for money",
-                        "service": "Customer support, delivery, seller service, or returns",
-                        "other": "General praise, recommendations, or another topic",
-                    },
-                ),
-            },
+            questions=questions,
+            model=request_model,
             output=output_layout.value,
             cache=cache,
             errors="coerce",
             max_concurrency=4,
-            progress=lambda update: _bar.update(),
+            progress=_on_progress,
         )
+    evaluation_progress = _progress_updates[-1]
     results = pd.concat([reviews, decisions], axis=1)
     _failed = decisions.isna().all(axis=1)
     results.insert(0, "evaluation_status", _failed.map({False: "ok", True: "failed"}))
@@ -377,7 +425,7 @@ async def _(
             "See the evaluation warning for failure positions."
         )
     mo.md(_message).callout(kind="warn" if _failed.any() else "success")
-    return decisions, results
+    return decisions, evaluation_progress, evaluation_requests, results
 
 
 @app.cell
@@ -419,29 +467,199 @@ def _(decisions):
     return
 
 
-@app.cell
-def _(reviews):
-    mo.md(f"""
-    ### One row, one request, several answers
+@app.cell(hide_code=True)
+def request_anatomy(reviews):
+    request_row = mo.ui.dropdown(
+        options={
+            f"Review {review_id}": position for position, review_id in enumerate(reviews.index)
+        },
+        value=f"Review {reviews.index[0]}",
+        label="Inspect a row",
+    )
+    mo.vstack(
+        [
+            mo.md("""
+            ## Anatomy of a Jev request
 
-    Each review is sent in one request containing all three questions. This demo
-    runs up to **4 row requests concurrently**: **{len(reviews):,} selected reviews**
-    need at most **{len(reviews):,} initial requests**, not {3 * len(reviews):,}.
-    Retries can add requests; cached reviews need none.
+            **One row, one request, several answers.** Follow a review from its
+            context to typed questions, then to the returned dataframe fields.
+            Inspired by the [TypeSafe playground](https://console.typesafe.ai/playground).
+            """),
+            mo.hstack(
+                [
+                    mo.stat(str(len(reviews)), label="Selected rows", bordered=True),
+                    mo.stat("3", label="Questions per request", bordered=True),
+                    mo.stat("4", label="Concurrent row requests", bordered=True),
+                ],
+                widths="equal",
+            ),
+            mo.md(f"""
+            Up to **{len(reviews):,} initial requests** evaluate this sample.
+            Retries can add requests; cached or identical reviews can reuse answers.
+            Choosing a row here only inspects it. Click **Evaluate reviews** above
+            to run inference.
+            """),
+            request_row,
+        ]
+    )
+    return (request_row,)
 
-    Each result keeps its input index and includes `dissatisfied__probability`,
-    `defect__probability`, and the selected topic with its full distribution.
-    The original `reference_sentiment` column remains available for comparison.
 
-    `output="columns"` returns separate fields. `output="struct"` packs those
-    same fields into one `result` column. Both keep one output row per review.
-    This demo uses `errors="coerce"`: a failed review stays in the table with
-    missing answers, an explicit status, and a warning. The library's default
-    `errors="raise"` stops on the first failure.
+@app.cell(hide_code=True)
+def request_preview(
+    make_request_body,
+    questions,
+    request_model,
+    request_row,
+    reviews,
+):
+    request_preview = make_request_body(reviews.iloc[request_row.value], questions, request_model)
+    mo.vstack(
+        [
+            mo.md(f"### Request preview · review {reviews.index[request_row.value]}"),
+            mo.md("""
+            The JSON body uses the same row, SDK questions, and model as evaluation.
+            This is a **preview**, not a network log: inspecting it sends nothing.
+            """),
+            mo.ui.tabs(
+                {
+                    "Request JSON": mo.vstack(
+                        [mo.md("`POST /v1/systemone`"), mo.json(request_preview)]
+                    ),
+                    "1 · State": mo.vstack(
+                        [
+                            mo.md("""
+                            **What Jev sees.** `state="review"` keeps the column name
+                            and sends this one review. Its dataframe index and
+                            `reference_sentiment` stay local.
+                            """),
+                            mo.json(request_preview["state"]),
+                        ]
+                    ),
+                    "2 · Questions": mo.vstack(
+                        [
+                            mo.md("""
+                            **What Jev decides.** All three named questions share
+                            this state in one request. `instructions` supplies the
+                            question; `type` determines its answer shape.
 
-    Changing only the layout or increasing the sample size reuses cached answers
-    for reviews already evaluated with the same questions.
-    """)
+                            **Noul** returns a probability of yes. **Choice** returns
+                            a selected label and probabilities for every criterion.
+                            The criterion descriptions explain what each label means.
+                            """),
+                            mo.accordion(
+                                {
+                                    f"{name} · {item['type']}": mo.json(item)
+                                    for name, item in request_preview["questions"].items()
+                                }
+                            ),
+                        ]
+                    ),
+                }
+            ),
+        ]
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def request_answers(
+    decisions,
+    evaluation_progress,
+    evaluation_requests,
+    request_row,
+    unpack_decision,
+):
+    inspected_fields = unpack_decision(decisions.iloc[request_row.value])
+    inspected_request = evaluation_requests[request_row.value]
+    mo.stop(
+        inspected_fields is None,
+        mo.md("""
+        **This row failed evaluation.** Its answers are missing; no valid
+        probabilities were returned. See the evaluation warning for the cause.
+        """).callout(kind="warn"),
+    )
+    _topic_probabilities = pd.DataFrame(
+        [
+            {"topic": label, "probability": inspected_fields[f"topic__p__{label}"]}
+            for label in inspected_request["questions"]["topic"]["criteria"]
+        ]
+    )
+    _topic_chart = (
+        alt.Chart(_topic_probabilities)
+        .mark_bar(color="#267f79")
+        .encode(
+            x=alt.X("probability:Q", scale=alt.Scale(domain=[0, 1]), title="Probability"),
+            y=alt.Y("topic:N", sort=_topic_probabilities["topic"].tolist(), title=None),
+            tooltip=["topic:N", alt.Tooltip("probability:Q", format=".1%")],
+        )
+        .properties(height=160, width="container")
+    )
+    mo.vstack(
+        [
+            mo.md(f"### 3 · Answers → dataframe · review {decisions.index[request_row.value]}"),
+            mo.md(
+                f"Latest evaluation: **{evaluation_progress.completed:,} rows**, "
+                f"**{evaluation_progress.cache_hits:,} reused answers**, "
+                f"**{evaluation_progress.failed:,} failures**. "
+                "Reuse includes cache hits and identical in-flight requests."
+            ),
+            mo.ui.tabs(
+                {
+                    "Answers": mo.vstack(
+                        [
+                            mo.hstack(
+                                [
+                                    mo.stat(
+                                        f"{inspected_fields['dissatisfied__probability']:.1%}",
+                                        label="Dissatisfied · Noul",
+                                        caption="Probability of yes",
+                                        bordered=True,
+                                    ),
+                                    mo.stat(
+                                        f"{inspected_fields['defect__probability']:.1%}",
+                                        label="Product defect · Noul",
+                                        caption="Probability of yes",
+                                        bordered=True,
+                                    ),
+                                ],
+                                widths="equal",
+                            ),
+                            mo.md(
+                                f"**Topic · Choice:** `{inspected_fields['topic__label']}` "
+                                f"({inspected_fields['topic__confidence']:.1%} confidence). "
+                                "All topic probabilities are shown below."
+                            ),
+                            _topic_chart,
+                        ]
+                    ),
+                    "Dataframe fields": mo.vstack(
+                        [
+                            mo.md("""
+                            jevframe names each field `<question>__<field>`.
+                            `output="columns"` returns these as separate columns;
+                            `output="struct"` packs the same fields into `result`.
+                            Both keep **one output row per input review**.
+                            These are evaluated fields, not a raw HTTP response.
+                            """),
+                            mo.json(inspected_fields),
+                            mo.ui.table(decisions.iloc[[request_row.value]], selection=None),
+                        ]
+                    ),
+                    "Evaluated request": mo.vstack(
+                        [
+                            mo.md("""
+                            Request body for this row at evaluation time, saved
+                            before awaiting inference. A reused answer needs no new
+                            request; this snapshot is not a log of HTTP attempts.
+                            """),
+                            mo.json(inspected_request),
+                        ]
+                    ),
+                }
+            ),
+        ]
+    )
     return
 
 
