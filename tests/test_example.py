@@ -8,11 +8,12 @@ def test_marimo_example_loads_and_evaluates_with_mocked_inference():
 import io
 import json
 import os
-import urllib.request
 import zipfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx2
+from fsspec.implementations.http import HTTPFileSystem
 from typesafe_sdk import AsyncTypeSafeClient
 
 from examples.reviews import app
@@ -25,11 +26,15 @@ with zipfile.ZipFile(archive_bytes, 'w') as archive:
         'sentiment labelled sentences/amazon_cells_labelled.txt',
         ''.join(f'Customer review {i}\t{i % 2}\n' for i in range(1000)),
     )
-def download(url, *, timeout):
+async def download(self, url, destination, **kwargs):
     assert url.startswith('https://archive.ics.uci.edu/static/public/331/')
-    assert timeout == 30
-    return io.BytesIO(archive_bytes.getvalue())
-urllib.request.urlopen = download
+    assert self.kwargs['timeout'] == 30
+    Path(destination).write_bytes(archive_bytes.getvalue())
+HTTPFileSystem._get_file = download
+async def exists(self, url, **kwargs):
+    assert url.startswith('https://archive.ics.uci.edu/static/public/331/')
+    return True
+HTTPFileSystem._exists = exists
 
 calls = []
 def handler(request):
@@ -59,6 +64,10 @@ assert len(initial['all_reviews']) == 1000
 assert len(initial['reviews']) == 50
 assert initial['reviews'].index.name == 'review_id'
 assert set(initial['all_reviews']['reference_sentiment']) == {'positive', 'negative'}
+assert initial['review_files'].protocol == 'zip'
+assert initial['review_files'].ls('sentiment labelled sentences', detail=False) == [
+    'sentiment labelled sentences/amazon_cells_labelled.txt',
+]
 assert 'results' not in initial
 assert calls == []
 controls = {
@@ -88,7 +97,7 @@ assert definitions['decisions'].shape == (50, 9)
 assert any(output is not None for output in outputs)
 # Repeat using the same data/cache, then edit one question: only the latter needs inference.
 controls.update({name: definitions[name] for name in (
-    'cache', 'reviews', 'all_reviews', 'csv', 'io', 'load_public_reviews', 'urlopen', 'zipfile',
+    'cache', 'reviews', 'all_reviews', 'csv', 'load_public_reviews',
 )})
 app.run(defs=controls)
 assert len(calls) == 50

@@ -44,7 +44,7 @@ Demo = "https://molab.marimo.io/github/ktaletsk/jevframe/blob/main/examples/revi
 [project.optional-dependencies]
 pandas = ["pandas>=2.2,<4"]
 polars = ["polars>=1,<2"]
-examples = ["pandas>=2.2,<4", "marimo>=0.19,<1", "altair>=5,<7"]
+examples = ["pandas>=2.2,<4", "marimo>=0.24,<1", "altair>=5,<7", "fsspec[http]>=2025.3"]
 
 [dependency-groups]
 dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "ruff>=0.11", "build>=1.2"]

@@ -2,6 +2,7 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #     "altair>=5,<7",
+#     "fsspec[http]>=2025.3",
 #     "jevframe[pandas]==0.1.0",
 #     "marimo>=0.24,<1",
 #     "typesafe-sdk>=0.7,<0.8",
@@ -188,26 +189,38 @@ def _():
 
 
 @app.cell
-def _():
+def review_storage():
+    import fsspec
+
+    # Keep the filesystem as a notebook variable for marimo's Remote Storage panel.
+    # Cache the small archive locally: UCI's HTTP response is not seekable.
+    review_files = fsspec.filesystem(
+        "zip",
+        fo=(
+            "simplecache::https://archive.ics.uci.edu/static/public/331/"
+            "sentiment+labelled+sentences.zip"
+        ),
+        target_options={"https": {"timeout": 30}},
+    )
+    return (review_files,)
+
+
+@app.cell
+def _(review_files):
     import csv
-    import io
-    import zipfile
-    from urllib.request import urlopen
 
     @mo.cache
     def load_public_reviews():
-        url = "https://archive.ics.uci.edu/static/public/331/sentiment+labelled+sentences.zip"
-        with urlopen(url, timeout=30) as response:
-            archive_bytes = response.read()
-        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
-            with archive.open("sentiment labelled sentences/amazon_cells_labelled.txt") as source:
-                frame = pd.read_csv(
-                    source,
-                    sep="\t",
-                    names=["review", "reference_sentiment"],
-                    quoting=csv.QUOTE_NONE,
-                    dtype={"review": "string", "reference_sentiment": "int64"},
-                )
+        with review_files.open(
+            "sentiment labelled sentences/amazon_cells_labelled.txt", "rb"
+        ) as source:
+            frame = pd.read_csv(
+                source,
+                sep="\t",
+                names=["review", "reference_sentiment"],
+                quoting=csv.QUOTE_NONE,
+                dtype={"review": "string", "reference_sentiment": "int64"},
+            )
         if len(frame) != 1000 or set(frame["reference_sentiment"]) != {0, 1}:
             raise ValueError("The UCI download does not match the expected review dataset.")
         frame["reference_sentiment"] = frame["reference_sentiment"].map(
@@ -226,6 +239,9 @@ def _():
     [UCI's Sentiment Labelled Sentences](https://doi.org/10.24432/C57604).
     Start with 50 rows, or increase the sample below. The shuffle is fixed, so
     larger samples include the same earlier rows and can reuse cached answers.
+
+    Browse the source files under **Files → Remote Storage → review_files**.
+    The public ZIP is downloaded once to a temporary cache by fsspec.
 
     The original sentiment labels are shown for comparison; **only the review
     text is sent to Jev**. This dataset deliberately contains 500 positive and

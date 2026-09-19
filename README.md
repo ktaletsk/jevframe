@@ -260,7 +260,12 @@ to see the results and probability histograms. Start with 50 reviews or select u
 1,000. Each uncached review uses one initial request containing all three questions;
 repeated evaluations reuse the cache. Only review text is sent to Jev; the dataset's
 reference sentiment labels remain available for comparison.
-The example makes no requests until the button is clicked and a key is configured.
+The example sends no inference requests until the button is clicked and a key is configured.
+
+The notebook uses `fsspec` to open the public ZIP through a temporary local cache.
+Its `review_files` connection appears in marimo's **Files → Remote Storage** panel,
+where you can browse the source files. This dependency belongs to the example extra;
+the library itself has no filesystem dependency.
 
 The badge opens the notebook's molab server view. Fork it into your workspace to
 add your own `TYPESAFE_API_KEY` secret. The notebook includes PEP 723 inline
