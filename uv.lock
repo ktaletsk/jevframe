@@ -673,6 +673,7 @@ name = "jevframe"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "httpx2" },
     { name = "tqdm" },
     { name = "typesafe-sdk" },
 ]
@@ -706,6 +707,7 @@ dev = [
 requires-dist = [
     { name = "altair", marker = "extra == 'examples'", specifier = ">=5,<7" },
     { name = "fsspec", extras = ["http"], marker = "extra == 'examples'", specifier = ">=2025.3" },
+    { name = "httpx2", specifier = ">=2,<3" },
     { name = "marimo", marker = "extra == 'examples'", specifier = ">=0.24,<1" },
     { name = "pandas", marker = "extra == 'examples'", specifier = ">=2.2,<4" },
     { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2,<4" },

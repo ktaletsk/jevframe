@@ -5,15 +5,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
-import os
 import warnings
 from dataclasses import dataclass
 from typing import Any
 
-from typesafe_sdk import AsyncTypeSafeClient, constants
+from typesafe_sdk import AsyncTypeSafeClient
 
 from ._cache import MemoryCache, client_token
 from ._context import RowSource, construct_context, contains_null
+from ._providers import Provider, resolve_backend
 from ._schema import QuestionPlan, encode, flatten
 from ._types import (
     Errors,
@@ -36,6 +36,7 @@ class Options:
     progress: bool | ProgressCallback = False
     errors: Errors = "raise"
     nulls: Nulls = "include"
+    provider: Provider = "auto"
 
     def __post_init__(self) -> None:
         if self.client is not None and not isinstance(self.client, AsyncTypeSafeClient):
@@ -58,6 +59,13 @@ class Options:
             raise ValueError("errors must be 'raise' or 'coerce'")
         if self.nulls not in ("include", "skip", "raise"):
             raise ValueError("nulls must be 'include', 'skip', or 'raise'")
+        if self.provider not in ("auto", "typesafe", "openrouter"):
+            raise ValueError("provider must be 'auto', 'typesafe', or 'openrouter'")
+        if self.client is not None and self.provider != "auto":
+            raise ValueError(
+                "provider applies only to clients jevframe creates; a supplied "
+                "client already carries its own configuration"
+            )
 
 
 def _create_client(**kwargs: Any) -> AsyncTypeSafeClient:
@@ -81,13 +89,16 @@ async def evaluate_rows(
     model = options.model
     client_kwargs: dict[str, Any] = {}
     if owned:
-        model = model or os.environ.get(constants.DEFAULT_MODEL_ENV, "").strip()
-        model = model or constants.DEFAULT_MODEL
-        base_url = os.environ.get(constants.BASE_URL_ENV, "").strip() or constants.DEFAULT_BASE_URL
-        api_key = os.environ.get(constants.API_KEY_ENV, "").strip() or None
-        client_kwargs = {"api_key": api_key, "model": model, "base_url": base_url}
-        credential_fingerprint = hashlib.sha256((api_key or "").encode()).digest()
-        scope: tuple[Any, ...] = ("owned", base_url.rstrip("/"), model, credential_fingerprint)
+        backend = resolve_backend(options.provider, model)
+        model = backend.model
+        client_kwargs = backend.client_kwargs()
+        credential_fingerprint = hashlib.sha256((backend.api_key or "").encode()).digest()
+        scope: tuple[Any, ...] = (
+            "owned",
+            backend.base_url.rstrip("/"),
+            model,
+            credential_fingerprint,
+        )
     else:
         scope = ("supplied", client_token(client), model) if cache is not None else ()
 

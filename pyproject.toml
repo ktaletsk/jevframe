@@ -33,7 +33,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Typing :: Typed",
 ]
-dependencies = ["typesafe-sdk>=0.7,<0.8", "tqdm>=4.66,<5"]
+dependencies = ["typesafe-sdk>=0.7,<0.8", "httpx2>=2,<3", "tqdm>=4.66,<5"]
 
 [project.urls]
 Documentation = "https://github.com/ktaletsk/jevframe#readme"
