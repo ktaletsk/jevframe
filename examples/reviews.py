@@ -16,11 +16,12 @@ app = marimo.App(width="medium", auto_download=["html"])
 
 with app.setup:
     import os
+    from contextlib import AsyncExitStack
 
     import altair as alt
     import marimo as mo
     import pandas as pd
-    from typesafe_sdk import Choice, Noul
+    from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul, RetryPolicy
 
     import jevframe.pandas  # noqa: F401
     from jevframe import MemoryCache
@@ -332,16 +333,24 @@ def worked_example_intro():
 
 
 @app.cell(hide_code=True)
-def api_key_notice():
-    mo.stop(bool(os.environ.get("TYPESAFE_API_KEY", "").strip()))
+def api_key_notice(using_demo_gateway):
+    mo.stop(not using_demo_gateway)
 
     mo.md(r"""
-    ## Typesafe AI key
+    **No API key needed for this demo.** Click **Evaluate reviews** to use the
+    sponsored Jev gateway. The default 50 reviews and questions are already cached.
 
-    - **Locally**: `export TYPESAFE_API_KEY='your-key'` before starting marimo
-    - **On molab:** open Development Panel in the bottom left corner, click
-      the **Secrets** tab and add `TYPESAFE_API_KEY`.
-    """).callout(kind="warn", title="Warning")
+    Edited questions and larger samples share an allowance of **500 new row
+    requests per UTC day** across all visitors. Cached requests keep working
+    after that limit. The gateway stores a shared cache of inputs and answers;
+    use it for public data only.
+
+    To use your own TypeSafe account instead, optionally set `TYPESAFE_API_KEY`:
+
+    - **Locally:** `export TYPESAFE_API_KEY='your-key'` before starting marimo.
+    - **On molab:** open the Development Panel in the bottom left corner, select
+      **Secrets**, and add `TYPESAFE_API_KEY`. Then click **Evaluate reviews** again.
+    """).callout(kind="info", title="Sponsored demo")
     return
 
 
@@ -473,13 +482,24 @@ def _():
 
 
 @app.cell
-def review_questions(defect_question, question, topic_question):
+def inference_connection(evaluate):
     from typesafe_sdk import constants as _sdk_defaults
 
-    # The inspector and inference share these exact SDK question objects.
+    # Recheck on every click so a secret added during the session takes effect.
+    evaluate.value  # noqa: B018
+    using_demo_gateway = not bool(os.environ.get("TYPESAFE_API_KEY", "").strip())
+    demo_gateway_url = "https://jev-api-wrapper-production.up.railway.app"
     request_model = (
-        os.environ.get("TYPESAFE_DEFAULT_MODEL", "").strip() or _sdk_defaults.DEFAULT_MODEL
+        "jev-latest"
+        if using_demo_gateway
+        else os.environ.get("TYPESAFE_DEFAULT_MODEL", "").strip() or _sdk_defaults.DEFAULT_MODEL
     )
+    return demo_gateway_url, request_model, using_demo_gateway
+
+
+@app.cell
+def review_questions(defect_question, question, topic_question):
+    # The inspector and inference share these exact SDK question objects.
     questions = {
         "dissatisfied": Noul(instructions=question.value),
         "defect": Noul(instructions=defect_question.value),
@@ -494,7 +514,7 @@ def review_questions(defect_question, question, topic_question):
             },
         ),
     }
-    return questions, request_model
+    return (questions,)
 
 
 @app.cell
@@ -523,6 +543,7 @@ def request_helpers():
 async def evaluate_reviews(
     cache,
     defect_question,
+    demo_gateway_url,
     evaluate,
     make_request_body,
     output_layout,
@@ -531,15 +552,9 @@ async def evaluate_reviews(
     request_model,
     reviews,
     topic_question,
+    using_demo_gateway,
 ):
     mo.stop(not evaluate.value)
-    mo.stop(
-        not os.environ.get("TYPESAFE_API_KEY", "").strip(),
-        mo.md(
-            "Add **TYPESAFE_API_KEY** in molab's **Secrets** sidebar, then click "
-            "**Evaluate reviews** again. Locally, export the variable before starting marimo."
-        ).callout(kind="warn"),
-    )
     mo.stop(
         not all(_input.value.strip() for _input in [question, defect_question, topic_question]),
         mo.md("Enter all three questions first."),
@@ -549,23 +564,36 @@ async def evaluate_reviews(
         make_request_body(row, questions, request_model) for row in reviews.to_dict("records")
     ]
     _progress_updates = []
-    with mo.status.progress_bar(total=len(reviews), title="Evaluating reviews") as _bar:
+    async with AsyncExitStack() as _clients:
+        # An explicit client keeps the demo URL and placeholder separate from
+        # the user's SDK environment settings. Close it after each evaluation.
+        _client = None
+        if using_demo_gateway:
+            _client = await _clients.enter_async_context(
+                AsyncTypeSafeClient(
+                    base_url=demo_gateway_url,
+                    api_key="public-demo",
+                    retry=RetryPolicy(max_retries=0),
+                )
+            )
+        with mo.status.progress_bar(total=len(reviews), title="Evaluating reviews") as _bar:
 
-        def _on_progress(update):
-            _progress_updates[:] = [update]
-            _bar.update()
+            def _on_progress(update):
+                _progress_updates[:] = [update]
+                _bar.update()
 
-        decisions = await reviews.jev.evaluate(
-            # Keep the reference labels out of the model's context.
-            state="review",
-            questions=questions,
-            model=request_model,
-            output=output_layout.value,
-            cache=cache,
-            errors="coerce",
-            max_concurrency=4,
-            progress=_on_progress,
-        )
+            decisions = await reviews.jev.evaluate(
+                # Keep the reference labels out of the model's context.
+                state="review",
+                questions=questions,
+                client=_client,
+                model=request_model,
+                output=output_layout.value,
+                cache=cache,
+                errors="coerce",
+                max_concurrency=4,
+                progress=_on_progress,
+            )
     evaluation_progress = _progress_updates[-1]
     results = pd.concat([reviews, decisions], axis=1)
     _failed = decisions.isna().all(axis=1)
@@ -580,6 +608,11 @@ async def evaluate_reviews(
             "probabilities. The histogram includes valid results only. "
             "See the evaluation warning for failure positions."
         )
+        if using_demo_gateway:
+            _message += (
+                " If the gateway's daily allowance is exhausted, try the cached default "
+                "questions with 50 reviews, or add your own TYPESAFE_API_KEY and evaluate again."
+            )
     mo.md(_message).callout(kind="warn" if _failed.any() else "success")
     return decisions, evaluation_progress, evaluation_requests, results
 
@@ -747,6 +780,7 @@ def request_answers(
     evaluation_requests,
     request_row,
     unpack_decision,
+    using_demo_gateway,
 ):
     inspected_fields = unpack_decision(decisions.iloc[request_row.value])
     inspected_request = evaluation_requests[request_row.value]
@@ -778,9 +812,15 @@ def request_answers(
             mo.md(f"### 3 · Answers → dataframe · review {decisions.index[request_row.value]}"),
             mo.md(
                 f"Latest evaluation: **{evaluation_progress.completed:,} rows**, "
-                f"**{evaluation_progress.cache_hits:,} reused answers**, "
+                f"**{evaluation_progress.cache_hits:,} reused in this notebook**, "
                 f"**{evaluation_progress.failed:,} failures**. "
-                "Reuse includes cache hits and identical in-flight requests."
+                "Reuse includes local cache hits and identical in-flight requests. "
+                + (
+                    "The sponsored gateway also caches answers across visitors; "
+                    "those hits are not included in the local reuse count."
+                    if using_demo_gateway
+                    else ""
+                )
             ),
             mo.ui.tabs(
                 {

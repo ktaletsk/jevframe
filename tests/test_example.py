@@ -18,7 +18,7 @@ from fsspec.implementations.http import HTTPFileSystem
 from typesafe_sdk import AsyncTypeSafeClient
 
 from examples.reviews import app
-from jevframe import EvaluationWarning, MemoryCache, _engine
+from jevframe import EvaluationWarning, MemoryCache
 
 # Keep both the public dataset download and inference offline in this test.
 archive_bytes = io.BytesIO()
@@ -38,12 +38,21 @@ async def exists(self, url, **kwargs):
 HTTPFileSystem._exists = exists
 
 calls = []
+destinations = []
 fail_reviews = set()
+gateway_limited = False
+personal_unauthorized = False
 def handler(request):
     assert request.method == 'POST'
     assert request.url.path == '/v1/systemone'
     payload = json.loads(request.content)
     calls.append(payload)
+    destinations.append((request.url.host, request.headers['authorization']))
+    if gateway_limited and request.url.host == 'jev-api-wrapper-production.up.railway.app':
+        return httpx2.Response(429, json={'error': {'code': 'daily_limit'}},
+                               headers={'Retry-After': '3600'})
+    if personal_unauthorized and request.url.host == 'personal-typesafe.test':
+        return httpx2.Response(401, json={'message': 'Invalid personal key'})
     if payload['state']['review'] in fail_reviews:
         return httpx2.Response(400, json={'message': 'Test failure'})
     return httpx2.Response(200, json={
@@ -61,11 +70,24 @@ def handler(request):
         },
     })
 
-_engine._create_client = lambda **kwargs: AsyncTypeSafeClient(
-    api_key='test-key', transport=httpx2.MockTransport(handler),
-)
+# Intercept the public SDK for both the demo's explicit client and jevframe's
+# owned client. Keep the official class so client type checks still run.
+original_init = AsyncTypeSafeClient.__init__
+original_close = AsyncTypeSafeClient.aclose
+configurations, clients, closed_clients = [], [], []
+def mock_init(self, *args, **kwargs):
+    configurations.append(dict(kwargs))
+    kwargs['transport'] = httpx2.MockTransport(handler)
+    original_init(self, *args, **kwargs)
+    clients.append(self)
+async def tracked_close(self):
+    await original_close(self)
+    closed_clients.append(self)
+AsyncTypeSafeClient.__init__ = mock_init
+AsyncTypeSafeClient.aclose = tracked_close
 os.environ.pop('TYPESAFE_API_KEY', None)
 os.environ['TYPESAFE_DEFAULT_MODEL'] = 'test-model'
+os.environ['TYPESAFE_BASE_URL'] = 'https://personal-typesafe.test'
 _, initial = app.run()
 assert len(initial['all_reviews']) == 1000
 assert len(initial['reviews']) == 50
@@ -77,7 +99,8 @@ assert initial['review_files'].ls('sentiment labelled sentences', detail=False) 
 ]
 assert 'results' not in initial
 assert calls == []
-assert initial['request_preview']['model'] == 'test-model'
+assert initial['using_demo_gateway'] is True
+assert initial['request_preview']['model'] == 'jev-latest'
 assert initial['request_preview']['state'] == {
     'review': initial['reviews'].iloc[0]['review'],
 }
@@ -89,14 +112,43 @@ controls = {
     'topic_question': SimpleNamespace(value='What is the main issue?'),
     'output_layout': SimpleNamespace(value='columns'),
 }
-# A click before configuring a secret displays instructions, with no request.
+# A missing (or blank) secret selects the sponsored gateway, without changing
+# SDK environment settings. Its supported model overrides personal model defaults.
+os.environ['TYPESAFE_API_KEY'] = '   '
 _, missing_key = app.run(defs=controls)
-assert 'results' not in missing_key
-assert calls == []
+assert len(calls) == 50
+assert missing_key['results']['evaluation_status'].tolist() == ['ok'] * 50
+assert missing_key['using_demo_gateway'] is True
+assert missing_key['evaluation_requests'] == calls
+assert all(call['model'] == 'jev-latest' for call in calls)
+assert set(destinations) == {
+    ('jev-api-wrapper-production.up.railway.app', 'Bearer public-demo'),
+}
+assert configurations[-1]['retry'].max_retries == 0
+assert clients == closed_clients
+assert os.environ['TYPESAFE_API_KEY'] == '   '
+assert os.environ['TYPESAFE_BASE_URL'] == 'https://personal-typesafe.test'
+# Quota failures stay missing, do not retry Retry-After, and close the demo client.
+gateway_limited = True
+calls.clear()
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter('always', EvaluationWarning)
+    _, limited = app.run(defs={**controls, 'reviews': missing_key['reviews'].head(3)})
+assert len(calls) == 3
+assert limited['decisions'].isna().all().all()
+assert limited['evaluation_progress'].failed == 3
+assert any(isinstance(warning.message, EvaluationWarning) for warning in caught)
+assert clients == closed_clients
+gateway_limited = False
+calls.clear()
+destinations.clear()
 # Secrets added after opening the notebook work on the next click.
-os.environ['TYPESAFE_API_KEY'] = 'test-key'
+os.environ['TYPESAFE_API_KEY'] = ' test-key '
 outputs, definitions = app.run(defs=controls)
 assert len(calls) == 50
+assert definitions['using_demo_gateway'] is False
+assert definitions['request_model'] == 'test-model'
+assert set(destinations) == {('personal-typesafe.test', 'Bearer test-key')}
 assert all(set(call['questions']) == {'dissatisfied', 'defect', 'topic'} for call in calls)
 assert all(set(call['state']) == {'review'} for call in calls)
 assert definitions['results'].shape == (50, 12)
@@ -165,6 +217,21 @@ for layout in ('columns', 'struct'):
     assert failed['inspected_fields'] is None
     assert failed['results'].iloc[7]['evaluation_status'] == 'failed'
     assert failed['evaluation_progress'].failed == 1
+# A configured but invalid personal key never silently falls back to sponsorship.
+personal_unauthorized = True
+calls.clear()
+destinations.clear()
+with warnings.catch_warnings(record=True):
+    warnings.simplefilter('always', EvaluationWarning)
+    _, unauthorized = app.run(defs={
+        **controls, 'cache': MemoryCache(),
+        'reviews': definitions['reviews'].head(2),
+        'request_row': SimpleNamespace(value=0), 'output_layout': SimpleNamespace(value='columns'),
+    })
+assert len(calls) == 2
+assert set(destinations) == {('personal-typesafe.test', 'Bearer test-key')}
+assert unauthorized['decisions'].isna().all().all()
+assert clients == closed_clients
 """
     result = subprocess.run(
         [sys.executable, "-c", code],

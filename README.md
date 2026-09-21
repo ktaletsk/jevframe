@@ -22,8 +22,9 @@ bounded async concurrency and optional caching.
 or [browse the notebook source](https://github.com/ktaletsk/jevframe/blob/main/examples/reviews.py).
 Its **Anatomy of a Jev request** section lets you select a real review, inspect
 the state and typed questions in its JSON payload, and explore the evaluated
-probabilities and dataframe fields. Request previews work without an API key;
-only **Evaluate reviews** triggers inference.
+probabilities and dataframe fields. **Try the demo without an API key:** its
+default 50 reviews and questions are already cached by the sponsored gateway.
+Only **Evaluate reviews** sends requests; previews send nothing.
 
 ## Install jevframe
 
@@ -36,11 +37,14 @@ export TYPESAFE_API_KEY='your-key'
 Python 3.10+; the official `typesafe-sdk>=0.7,<0.8` handles inference. Dataframe
 dependencies are optional. Importing an integration registers its `.jev` accessor.
 
-On **molab**, open the notebook's **Secrets** sidebar panel and add
+The demo automatically uses your own key when present. On **molab**, optionally
+open the notebook's **Secrets** sidebar panel and add
 `TYPESAFE_API_KEY` with your key as its value. molab loads it automatically and
 persists it between sessions; `.env` secrets are excluded from forks.
 [Molab's secrets documentation](https://marimo.io/pages/molab/storage#secrets-stay-with-your-notebook).
 Then click **Evaluate reviews** in the demo. You do not need to put the key in a code cell.
+The library itself requires your own credentials or an explicitly supplied client;
+the sponsored fallback is configured only in this example notebook.
 
 ## Classify and score pandas DataFrames
 
@@ -264,15 +268,22 @@ to see the results and probability histograms. Start with 50 reviews or select u
 1,000. Each uncached review uses one initial request containing all three questions;
 repeated evaluations reuse the cache. Only review text is sent to Jev; the dataset's
 reference sentiment labels remain available for comparison.
-The example sends no inference requests until the button is clicked and a key is configured.
+The example sends no requests until the button is clicked. Without `TYPESAFE_API_KEY`,
+it uses the [sponsored gateway](https://jev-api-wrapper-production.up.railway.app/docs).
+The default 50-row run is cached; edited questions and larger samples share a
+**500 new row requests per UTC day** allowance across visitors. Cached requests
+remain available after the limit. Gateway retries are disabled, and failed rows
+keep missing probabilities. The gateway shares cached inputs and answers, so use
+public data only. Adding your own key switches back to your normal SDK connection.
 
 The notebook uses `fsspec` to open the public ZIP through a temporary local cache.
 Its `review_files` connection appears in marimo's **Files → Remote Storage** panel,
 where you can browse the source files. This dependency belongs to the example extra;
 the library itself has no filesystem dependency.
 
-The badge opens the notebook's molab server view. Fork it into your workspace to
-add your own `TYPESAFE_API_KEY` secret. The notebook includes PEP 723 inline
+The badge opens the notebook's molab server view, ready to try without a key.
+Fork it into your workspace if you want to add your own `TYPESAFE_API_KEY` secret.
+The notebook includes PEP 723 inline
 dependency metadata that installs `jevframe[pandas]==0.1.0` from PyPI.
 
 ## Development and support
