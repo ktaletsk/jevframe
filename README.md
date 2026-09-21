@@ -32,6 +32,7 @@ Only **Evaluate reviews** sends requests; previews send nothing.
 uv add 'jevframe[pandas]==0.1.0'     # in your uv project
 # Or: uv add 'jevframe[polars]==0.1.0' / 'jevframe[pandas,polars]==0.1.0'
 export TYPESAFE_API_KEY='your-key'
+# Or, with an OpenRouter account: export OPENROUTER_API_KEY='your-key'
 ```
 
 Python 3.10+; the official `typesafe-sdk>=0.7,<0.8` handles inference. Dataframe
@@ -207,6 +208,7 @@ Every method accepts these keyword arguments:
 | `progress` | `False` | `True` for tqdm, or a synchronous `Progress` callback |
 | `errors` | `"raise"` | `"coerce"` returns missing results and an `EvaluationWarning` |
 | `nulls` | `"include"` | `"skip"` skips rows with any null context; `"raise"` rejects them |
+| `provider` | `"auto"` | `"openrouter"` routes to Jev on OpenRouter; `"typesafe"` forces TypeSafe |
 
 Null policy applies **after** constructing context, including nested nulls. A row
 failure makes every question result for that row missing. `EvaluationError.position`
@@ -244,9 +246,69 @@ There is no disk cache. Model aliases can change: use a pinned model for reprodu
 work and `cache.clear()` when fresh results are needed.
 
 No API call runs merely by importing the library. Evaluation sends the chosen
-context to TypeSafe. Late context errors can occur after other rows have completed;
-completed requests cannot be undone. Credentials are read from the environment or
-the SDK client; the library does not discover or load dotenv files.
+context to TypeSafe, or to OpenRouter when that backend is selected. Late context
+errors can occur after other rows have completed; completed requests cannot be
+undone. Credentials are read from the environment or the SDK client; the library
+does not discover or load dotenv files.
+
+## Using OpenRouter instead of TypeSafe
+
+Jev is also served by [OpenRouter](https://openrouter.ai/), so an existing
+OpenRouter key works without a separate TypeSafe account:
+
+```sh
+export OPENROUTER_API_KEY='sk-or-...'
+```
+
+```python
+probabilities = await df.jev.noul(
+    "Is this customer dissatisfied?", state="review", provider="openrouter"
+)
+```
+
+`provider` defaults to `"auto"`: TypeSafe whenever `TYPESAFE_API_KEY` is set, and
+OpenRouter when only `OPENROUTER_API_KEY` is. Existing setups therefore keep their
+current backend; pass `provider="typesafe"` to pin it. `provider` configures the
+client jevframe creates, so it cannot be combined with a supplied `client`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OPENROUTER_API_KEY` | — | Required credential; the TypeSafe key is never reused |
+| `OPENROUTER_DEFAULT_MODEL` | `typesafe/jev-1.13` | OpenRouter has no moving `jev-latest` alias |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai` | API root, for gateways and tests |
+
+Bare model names are namespaced for OpenRouter's catalog, so `model="jev-1.13"`
+is sent as `typesafe/jev-1.13`. Requests go to OpenRouter's decisions endpoint,
+`POST /api/alpha/decisions`, which takes the same `state`/`questions` body and
+returns the same answers as TypeSafe's `POST /v1/systemone`; Jev is not available
+through chat completions. Only the URL, credential, and model namespace differ,
+so retries, timeouts, concurrency, caching, null and error policies, and every
+result column behave identically. The two backends have separate cache
+namespaces.
+
+Supply your own client to set SDK options, or to reuse one connection pool:
+
+```python
+from jevframe import openrouter_client
+from typesafe_sdk import RetryPolicy
+
+async with openrouter_client(timeout=30, retry=RetryPolicy(max_retries=3)) as client:
+    result = await df.jev.noul("Is this urgent?", state="review", client=client)
+```
+
+OpenRouter reports the per-request `cost` alongside token counts. jevframe returns
+only answer columns, so read it from the raw response when you need it, or from
+OpenRouter's activity dashboard:
+
+```python
+from typesafe_sdk import Noul
+
+async with openrouter_client() as client:
+    response = await client.system_one(
+        state="I was charged twice", questions={"billing": Noul(instructions="Billing?")}
+    )
+    print(response.raw_http_response.json()["usage"])  # input_tokens, output_tokens, cost
+```
 
 ## Interactive marimo notebook
 
@@ -305,4 +367,5 @@ uv build
 
 Tests use the official SDK with mocked HTTP transport; no API key or live calls
 are required. v0 focuses on row-wise decisions, with no chat interface, automatic
-analysis, generated code, custom dtypes, Excel integration, or provider framework.
+analysis, generated code, custom dtypes, Excel integration, or a general provider
+framework beyond the two Jev endpoints described above.

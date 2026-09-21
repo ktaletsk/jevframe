@@ -11,6 +11,7 @@ from typesafe_sdk import AsyncTypeSafeClient, JSONContent, Noul, Score
 from ._cache import MemoryCache
 from ._context import RowSource
 from ._engine import Options, evaluate_rows
+from ._providers import Provider
 from ._schema import QuestionPlan, choice_question, make_plan
 from ._types import Errors, Nulls, Output, ProgressCallback, Question, State
 
@@ -47,9 +48,10 @@ class BaseAccessor(ABC, Generic[FrameT, SeriesT]):
         progress: bool | ProgressCallback = False,
         errors: Errors = "raise",
         nulls: Nulls = "include",
+        provider: Provider = "auto",
     ) -> SeriesT:
         """Return a yes-probability Series, without thresholding or changing rows."""
-        options = Options(client, model, max_concurrency, cache, progress, errors, nulls)
+        options = Options(client, model, max_concurrency, cache, progress, errors, nulls, provider)
         plan = make_plan({"result": Noul(instructions=question)}, prefix=False)
         source = self._source(state)
         values = await evaluate_rows(source, state, plan, options)
@@ -69,10 +71,11 @@ class BaseAccessor(ABC, Generic[FrameT, SeriesT]):
         progress: bool | ProgressCallback = False,
         errors: Errors = "raise",
         nulls: Nulls = "include",
+        provider: Provider = "auto",
     ) -> FrameT:
         """Return labels, confidence, and probabilities as columns or one result struct."""
         _validate_output(output)
-        options = Options(client, model, max_concurrency, cache, progress, errors, nulls)
+        options = Options(client, model, max_concurrency, cache, progress, errors, nulls, provider)
         plan = make_plan({"result": choice_question(question, choices)}, prefix=False)
         source = self._source(state)
         values = await evaluate_rows(source, state, plan, options)
@@ -92,10 +95,11 @@ class BaseAccessor(ABC, Generic[FrameT, SeriesT]):
         progress: bool | ProgressCallback = False,
         errors: Errors = "raise",
         nulls: Nulls = "include",
+        provider: Provider = "auto",
     ) -> FrameT:
         """Return level/label, expected score, and probabilities as columns or a struct."""
         _validate_output(output)
-        options = Options(client, model, max_concurrency, cache, progress, errors, nulls)
+        options = Options(client, model, max_concurrency, cache, progress, errors, nulls, provider)
         if isinstance(levels, (str, bytes)) or not isinstance(levels, Sequence):
             raise TypeError("levels must be an ordered sequence of descriptions")
         plan = make_plan({"result": Score(instructions=question, criteria=levels)}, prefix=False)
@@ -116,10 +120,11 @@ class BaseAccessor(ABC, Generic[FrameT, SeriesT]):
         progress: bool | ProgressCallback = False,
         errors: Errors = "raise",
         nulls: Nulls = "include",
+        provider: Provider = "auto",
     ) -> FrameT:
         """Evaluate questions per row, with prefixed fields in columns or a result struct."""
         _validate_output(output)
-        options = Options(client, model, max_concurrency, cache, progress, errors, nulls)
+        options = Options(client, model, max_concurrency, cache, progress, errors, nulls, provider)
         plan = make_plan(questions, prefix=True)
         source = self._source(state)
         values = await evaluate_rows(source, state, plan, options)
