@@ -340,7 +340,7 @@ def api_key_notice(using_demo_gateway):
     **No API key needed for this demo.** Click **Evaluate reviews** to use the
     sponsored Jev gateway. The default 50 reviews and questions are already cached.
 
-    Edited questions and larger samples share an allowance of **500 new row
+    Edited questions and larger samples share an allowance of **2,000 new row
     requests per UTC day** across all visitors. Cached requests keep working
     after that limit. The gateway stores a shared cache of inputs and answers;
     use it for public data only.

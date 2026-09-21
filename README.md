@@ -271,7 +271,7 @@ reference sentiment labels remain available for comparison.
 The example sends no requests until the button is clicked. Without `TYPESAFE_API_KEY`,
 it uses the [sponsored gateway](https://jev-api-wrapper-production.up.railway.app/docs).
 The default 50-row run is cached; edited questions and larger samples share a
-**500 new row requests per UTC day** allowance across visitors. Cached requests
+**2,000 new row requests per UTC day** allowance across visitors. Cached requests
 remain available after the limit. Gateway retries are disabled, and failed rows
 keep missing probabilities. The gateway shares cached inputs and answers, so use
 public data only. Adding your own key switches back to your normal SDK connection.
