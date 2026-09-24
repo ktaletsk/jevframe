@@ -23,6 +23,9 @@ from ._types import Question
 
 # Allow floating-point/API rounding, without repairing or renormalizing values.
 PROBABILITY_TOLERANCE = 1e-6
+# Jev-compatible servers such as laya-serve round each reported value to four
+# decimals, so allow half a unit in that place per value that feeds a check.
+ROUNDING_TOLERANCE = 5e-5
 
 
 def encode(value: Any) -> str:
@@ -130,7 +133,8 @@ def distribution(values: Mapping[Any, float], keys: Sequence[Any]) -> list[float
     if set(values) != set(keys):
         raise ValueError("Probability distribution keys differ from the requested criteria")
     result = [probability(values[key]) for key in keys]
-    if not math.isclose(math.fsum(result), 1, rel_tol=0, abs_tol=PROBABILITY_TOLERANCE):
+    tolerance = PROBABILITY_TOLERANCE + ROUNDING_TOLERANCE * len(result)
+    if not math.isclose(math.fsum(result), 1, rel_tol=0, abs_tol=tolerance):
         raise ValueError("Probability distribution must sum to one")
     return result
 
@@ -171,14 +175,15 @@ def flatten(response: SystemOneResponse, plan: QuestionPlan) -> tuple[Any, ...]:
                 raise ValueError("Score legend differs from the requested levels")
             score = answer.score
             expected = math.fsum(i * p for i, p in enumerate(probabilities))
+            # The score and each probability weighted by its level may be rounded.
+            weight = 1 + math.fsum(range(len(levels)))
+            tolerance = PROBABILITY_TOLERANCE * len(levels) + ROUNDING_TOLERANCE * weight
             if (
                 isinstance(score, bool)
                 or not isinstance(score, (int, float))
                 or not math.isfinite(score)
                 or not 0 <= score <= len(levels) - 1
-                or not math.isclose(
-                    score, expected, rel_tol=0, abs_tol=PROBABILITY_TOLERANCE * len(levels)
-                )
+                or not math.isclose(score, expected, rel_tol=0, abs_tol=tolerance)
             ):
                 raise ValueError("Score is not the expected zero-based level")
             level = max(range(len(levels)), key=probabilities.__getitem__)

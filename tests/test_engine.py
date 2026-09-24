@@ -258,6 +258,65 @@ async def test_invalid_score(make_client, patch):
         )
 
 
+# Answers captured from laya-serve, which rounds every value to four decimals.
+FOUR_DECIMAL_CHOICE = {
+    "choice": "c",
+    "confidence": 0.0,
+    "probabilities": {"a": 0.3333, "b": 0.3333, "c": 0.3333},
+}
+FOUR_DECIMAL_SCORE = {
+    "score": 2.0,
+    "confidence": 0.0,
+    "probabilities": {"0": 0.1998, "1": 0.2002, "2": 0.2002, "3": 0.2, "4": 0.1999},
+}
+
+
+def patched(patch):
+    def handler(payload, _):
+        body = response_body(payload)
+        body["answers"]["result"].update(patch)
+        return body
+
+    return handler
+
+
+async def test_four_decimal_rounding_is_accepted_unchanged(make_client):
+    frame = pd.DataFrame({"x": [1]})
+    client, _, _ = make_client(patched(FOUR_DECIMAL_CHOICE))
+    topics = await frame.jev.choice("Topic?", choices=["a", "b", "c"], state="x", client=client)
+    assert topics.iloc[0].tolist() == ["c", 0.0, 0.3333, 0.3333, 0.3333]
+
+    client, _, _ = make_client(patched(FOUR_DECIMAL_SCORE))
+    grades = await frame.jev.score("Grade?", levels=list("FDCBA"), state="x", client=client)
+    assert grades.loc[0, "score"] == 2.0
+    assert grades.loc[0, ["p__0", "p__1", "p__2", "p__3", "p__4"]].tolist() == [
+        0.1998,
+        0.2002,
+        0.2002,
+        0.2,
+        0.1999,
+    ]
+
+
+@pytest.mark.parametrize(
+    "method, patch",
+    [
+        # Beyond half a unit in the fourth decimal per probability.
+        ("choice", {"probabilities": {"a": 0.3333, "b": 0.3333, "c": 0.3331}}),
+        ("score", {"score": 2.002}),
+    ],
+)
+async def test_errors_beyond_four_decimal_rounding_are_rejected(make_client, method, patch):
+    base = FOUR_DECIMAL_CHOICE if method == "choice" else FOUR_DECIMAL_SCORE
+    client, _, _ = make_client(patched({**base, **patch}))
+    frame = pd.DataFrame({"x": [1]})
+    with pytest.raises(EvaluationError):
+        if method == "choice":
+            await frame.jev.choice("Topic?", choices=["a", "b", "c"], state="x", client=client)
+        else:
+            await frame.jev.score("Grade?", levels=list("FDCBA"), state="x", client=client)
+
+
 async def test_partial_or_extra_answers_fail_the_whole_row(make_client):
     def handler(payload, call):
         body = response_body(payload)

@@ -248,6 +248,29 @@ context to TypeSafe. Late context errors can occur after other rows have complet
 completed requests cannot be undone. Credentials are read from the environment or
 the SDK client; the library does not discover or load dotenv files.
 
+### Run locally with Laya (experimental)
+
+[Laya](https://github.com/NandhaKishorM/laya) is an Apache-2.0, open-weights
+decision model whose `laya-serve` implements Jev's `/v1/systemone` protocol. Point
+the official client at it to evaluate rows on your own hardware:
+
+```sh
+pip install "laya[serve]"
+laya-serve  # downloads checkpoints from Hugging Face on first start; binds :8000
+```
+
+```python
+async with AsyncTypeSafeClient(api_key="local", base_url="http://localhost:8000") as client:
+    result = await df.jev.noul("Is this urgent?", state="review", client=client)
+```
+
+The API key must match `LAYA_API_KEY` when the server sets it; otherwise any value
+works. The default model lets Laya route each row by language. Pass
+`model="english"`, `"multilingual"`, or `"typed-decisions"` to pin a checkpoint.
+Laya rounds probabilities and scores to four decimals. jevframe accepts that rounding
+and reports the values unchanged. `laya-serve` runs one inference at a time, so
+`max_concurrency` does not increase its throughput.
+
 ## Interactive marimo notebook
 
 [Open the demo on a molab server](https://molab.marimo.io/github/ktaletsk/jevframe/blob/main/examples/reviews.py/server)
